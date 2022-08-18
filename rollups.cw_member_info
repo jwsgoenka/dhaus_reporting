@@ -1,0 +1,1025 @@
+#!/usr/bin/env ruby
+
+require_relative('../lib/jw_rollup.rb')
+
+select_query = %q[
+
+SELECT
+    members.member_id,
+    members.first_name,
+    members.last_name,
+    members.middle_name,
+    members.preferred_name,
+    members.start_date,
+    members.company_id,
+    c.name AS company_name,
+    plan.plan_type AS company_plan_type,
+    CASE  WHEN init.company_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS company_was_ever_customer,
+    CASE  WHEN plan.plan_type IN ('employee_basic','employee_premium','employee_premium_unbundled','premier2019','peo') AND last.paid_prev_month = 1
+          THEN 1
+          ELSE 0
+          END AS company_is_active_customer,
+    CASE  WHEN plan.plan_type IN ('employee_basic','employee_premium','employee_premium_unbundled','premier2019','peo') AND last.company_id is null
+          THEN 1
+          ELSE 0
+          END AS company_is_new_this_month,
+    CASE  WHEN ee_fees.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END as ee_fee_paid,
+    ee_fees.most_recent_month as most_recent_month_ee_fee_paid,
+    members.member_status,
+    members.effective_date,
+    members.member_type,
+    members.desk_title,
+    members.department_name,
+    members.flsa_exemption_status,
+    members.member_state_id,
+    members.email_work,
+    members.email_home,
+    members.phone_home,
+    members.phone_office,
+    members.phone_cell,
+    members.age,
+    members.date_of_birth,
+    members.i9_status,
+    members.workers_comp_classification_code,
+    members.pay_basis,
+    members.pay_rate_amount,
+    members.pay_frequency,
+    members.standard_minutes_per_week,
+    CASE WHEN members.scorp_owner = 'true'
+          THEN 1
+          ELSE 0
+          END AS tax_scorp_owner,
+    CASE  WHEN members.member_status = 'terminated'
+          THEN 0
+          WHEN perms.num_perms IS NOT NULL
+          THEN perms.num_perms
+          ELSE 0
+          END AS num_permissions,
+    CASE  WHEN members.member_status = 'terminated'
+          THEN 0
+          WHEN perms.is_member_with_most_permissions = 1
+          THEN 1
+          ELSE 0
+          END AS is_member_with_most_permissions,
+    CASE WHEN members.member_status = 'terminated'
+          THEN null
+          WHEN perms.permission_names IS NOT NULL
+          THEN perms.permission_names
+          ELSE null
+          END AS permission_name_list,
+    members.admin,
+    CASE when manager.manager_member_id IS NOT NULL
+         THEN 1
+         ELSE 0
+         END as manager,
+    CASE WHEN contacts.preferred_contact_types IS NOT NULL
+         THEN 1
+         ELSE 0
+         END AS preferred_contact,
+    CASE WHEN contacts.preferred_contact_types IS NOT NULL
+         THEN contacts.preferred_contact_types
+         ELSE 'n/a'
+         END AS preferred_contact_types,
+    members.remote,
+    CASE 
+           WHEN members.office_id IS NOT NULL THEN a1.city 
+           WHEN members.home_address_id IS NOT NULL THEN a2.city 
+           ELSE a3.city
+       END AS work_city,
+       CASE
+           WHEN members.office_id IS NOT NULL THEN a1.state
+           WHEN members.home_address_id IS NOT NULL THEN a2.state 
+           ELSE a3.state
+       END AS work_state,
+       CASE
+           WHEN members.office_id IS NOT NULL THEN a1.postal_code
+           WHEN members.home_address_id IS NOT NULL THEN a2.postal_code
+           ELSE a3.postal_code 
+       END AS work_postal_code,
+       CASE
+           WHEN members.office_id IS NOT NULL THEN a1.geocode 
+           WHEN members.home_address_id IS NOT NULL THEN a2.geocode
+           ELSE a3.geocode 
+       END AS work_geocode,
+       CASE 
+           WHEN members.office_id IS NOT NULL THEN msa1.msa_number
+           WHEN members.home_address_id IS NOT NULL THEN msa2.msa_number
+           ELSE msa3.msa_number
+          END AS work_msa_number,
+       CASE 
+           WHEN members.office_id IS NOT NULL THEN msa1.msa_name
+           WHEN members.home_address_id IS NOT NULL THEN msa2.msa_name
+          ELSE msa3.msa_name
+          END AS work_msa_name,
+    a2.city AS home_city,
+    a2.state AS home_state,
+    a2.postal_code AS home_postal_code,
+    a2.geocode AS home_geocode,
+    msa2.msa_number AS home_msa_number,
+    msa2.msa_name AS home_msa_name,
+    members.office_id,
+    members.home_address_id,
+    CASE  WHEN ins.jw_medical_policy_name IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS benefits_medical,
+    ins.medical_provider_name,
+    ins.medical_enrollment_type,
+    ins.jw_medical_policy_name,
+    CASE  WHEN ins.jw_dental_policy_name IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS benefits_dental,
+    ins.dental_provider_name,
+    ins.dental_enrollment_type,
+    ins.jw_dental_policy_name,
+    CASE  WHEN ins.jw_vision_policy_name IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS benefits_vision,
+    ins.vision_provider_name,
+    ins.vision_enrollment_type,
+    ins.jw_vision_policy_name,
+    CASE  WHEN hsa.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS hsa,
+    CASE  WHEN fsa.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS fsa,
+    CASE  WHEN commuter.member_id IS NOT NULL
+          THEN commuter.commuter
+          ELSE 0
+          END AS commuter,
+    -- set commuter effective date to past for persistent non-commuters
+    CASE  WHEN commuter.member_id IS NOT NULL
+          THEN commuter.max_post_date
+          ELSE NULL
+          END AS commuter_max_effective_date,
+    CASE  WHEN slavic.member_id IS NOT NULL
+          THEN 'slavic'
+          ELSE NULL
+          END as four01k_provider,
+    CASE  WHEN slavic.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS four01k,
+    CASE  WHEN perks_gym.member_id IS NOT NULL AND perks_gym.gym = 1
+          THEN 1
+          ELSE 0
+          END AS gym,
+    CASE  WHEN perks_bike.member_id IS NOT NULL AND perks_bike.ny_citibike = 1
+          THEN 1
+          ELSE 0
+          END AS ny_citibike,
+    CASE  WHEN perks_classpass.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS classpass,
+    CASE  WHEN life_add.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS metlife_life_add,
+    CASE  WHEN std.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS metlife_std,
+    CASE  WHEN ltd.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS metlife_ltd,
+    CASE WHEN ee_std.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS ee_std,
+    CASE WHEN ee_ltd.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS ee_ltd,
+    CASE WHEN ee_supp.member_id IS NOT NULL
+          THEN 1
+          ELSE 0
+          END AS ee_supp,
+    CASE WHEN TRUE IN (active_member.id IS NULL, pte_thirty_hours_ineligible) THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END benefits_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, mtbool.is_owner_unpaid, (members.scorp_owner = 'true' and hsa.member_contribution_amount !=0), mhsa_eligible.member_id IS NULL, pte_thirty_hours_ineligible) THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END as hsa_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, mtbool.is_owner_unpaid, members.scorp_owner = 'true', cfsa_eligible.company_id IS NULL) THEN 0
+         WHEN cfsa_eligible.pte_eligible = 0 AND pte_thirty_hours_ineligible THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END as fsa_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, mtbool.is_owner_unpaid, members.scorp_owner = 'true') THEN 0 
+         WHEN pte_thirty_hours_ineligible AND mtbool.member_type = 'employee_part_time' THEN 0
+         WHEN (ctransit_restrict_pte.company_id IS NOT NULL AND mtbool.member_type = 'employee_part_time') THEN 0
+         WHEN (ctransit_restrict_interns.company_id IS NOT NULL AND mtbool.member_type = 'paid_intern') THEN 0
+         ELSE (mtbool.member_type = 'paid_intern' OR mtbool.is_eligible_for_benefits) :: INT END as commuter_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, mtbool.is_owner_unpaid, members.scorp_owner = 'true', cfour01k_eligible.company_id IS NULL, cfour01k_eligible.participation_age > members.age) THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END as four01k_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, coalesce(cperks_eligible.citi_bike,0) = 0) THEN 0
+         WHEN cperks_eligible.citi_bike_pte_enabled = 0 AND pte_thirty_hours_ineligible THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END bike_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, coalesce(cperks_eligible.gym,0) = 0) THEN 0
+         WHEN cperks_eligible.gym_pte_enabled = 0 AND pte_thirty_hours_ineligible THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END gym_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, cperks_classpass_eligible.company_id IS NULL) THEN 0
+         WHEN cperks_classpass_eligible.pte_enabled = 0 AND pte_thirty_hours_ineligible THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END classpass_eligible,
+    CASE WHEN TRUE IN (active_member.id IS NULL, mtbool.is_owner_unpaid, members.scorp_owner = 'true', pte_thirty_hours_ineligible) THEN 0
+         ELSE mtbool.is_eligible_for_benefits :: INT END as ee_abp_eligible
+  FROM (
+      -- company/admin/number of perms/remote/age/home state/work state
+      SELECT
+        cm.id AS member_id,
+        cm.company_id,
+        ms.member_status,
+        ms.effective_date,
+        ms.member_type,
+        cm.first_name,
+        cm.last_name,
+        cm.middle_name,
+        cm.preferred_name,
+        cm.email_work,
+        u.email_home,
+        cm.phone_home,
+        cm.phone_office,
+        cm.phone_cell,
+        CASE  WHEN cm.superuser = 1
+              THEN 1
+              ELSE 0
+              END AS admin,
+        cm.desk_title,
+        d.name as department_name,
+        cm.start_date,
+        cm.gender,
+        cm.date_of_birth,
+        DATEDIFF('day', cm.date_of_birth, current_date)/365.25 AS age,
+        CASE WHEN (cm.office_id IS NULL AND cm.home_address_id IS NOT NULL) THEN 1
+             ELSE 0
+             END AS remote,
+        office_id,
+        home_address_id,
+        cm.i9_status,
+        workers_comp_classification_code,
+        ms.pay_basis,
+        ms.pay_rate_amount,
+        CASE
+          WHEN ms.pay_frequency IS NULL
+                THEN ( CASE WHEN ms.pay_basis = 'salary'
+                             AND (ms.flsa_exemption_status = 'exempt'
+                                  OR ms.flsa_exemption_status IS NULL) THEN 'semimonthly'
+                            WHEN ms.pay_basis = 'hourly'
+                                  OR (ms.pay_basis = 'salary'
+                                      AND ms.flsa_exemption_status = 'nonexempt') THEN 'biweekly'
+                            WHEN ms.pay_basis = 'none' THEN 'none'
+                            END)
+          ELSE ms.pay_frequency
+        END AS pay_frequency,
+        ms.standard_minutes_per_week,
+        ms.flsa_exemption_status,
+        ms.id as member_state_id,
+        msetting.scorp_owner,
+        CASE WHEN mtbool.is_employee_part_time
+                  AND (standard_minutes_per_week / 60.00 < 30 or standard_minutes_per_week IS NULL )
+             THEN TRUE
+             END as pte_thirty_hours_ineligible -- true if PTE hours ineligible for benefits
+      FROM
+        clockwork.members cm
+      LEFT JOIN clockwork.users u
+        ON cm.user_id = u.id
+      LEFT JOIN clockwork.departments d
+        ON cm.department_id = d.id
+      LEFT JOIN (
+          SELECT
+            member_id,
+            MAX(effective_date) AS max_effective_date
+          FROM
+            clockwork.member_states
+          WHERE
+            effective_date <= CURRENT_DATE
+          GROUP BY
+            member_id
+        ) max_eff
+          ON cm.id = max_eff.member_id
+      LEFT JOIN (
+          SELECT
+            member_id,
+            effective_date,
+            MAX(updated_at) AS max_updated_date
+          FROM
+            clockwork.member_states
+          WHERE
+            effective_date <= CURRENT_DATE
+          GROUP BY
+            member_id,
+            effective_date
+        ) max_up
+          ON max_up.member_id = max_eff.member_id
+          AND max_up.effective_date = max_eff.max_effective_date
+      LEFT JOIN clockwork.member_states ms
+          ON ms.member_id = max_up.member_id
+          AND ms.effective_date = max_up.effective_date
+          AND ms.updated_at = max_up.max_updated_date
+      LEFT JOIN (
+        SELECT member_id,
+               max (case when name = 'tax.scorp_owner' then value end) as scorp_owner
+        FROM clockwork.member_settings
+        GROUP BY member_id
+      ) msetting on msetting.member_id = cm.id
+      LEFT OUTER JOIN static.member_type_booleans mtbool on mtbool.member_type = ms.member_type
+  ) members
+
+  LEFT JOIN (
+      SELECT
+        ccp2.company_id as company_id,
+        ccp2.plan_type as plan_type
+      -- current latest plan effective date
+      FROM (
+          SELECT
+            ccp.company_id,
+            MAX(ccp.effective_date) as max_date
+          FROM
+            clockwork.company_plans ccp
+          WHERE
+            ccp.effective_date <= CURRENT_DATE
+          GROUP BY
+            ccp.company_id
+          ) ccp1
+        -- lastest plan info
+      INNER JOIN (
+          SELECT
+            ccp.company_id,
+            ccp.plan_type,
+            ccp.effective_date
+          FROM
+            clockwork.company_plans ccp
+          INNER JOIN
+            clockwork.companies cc
+                ON cc.id = ccp.company_id
+        ) ccp2
+        ON ccp1.company_id = ccp2.company_id
+        AND ccp1.max_date = ccp2.effective_date
+  ) plan
+  ON members.company_id = plan.company_id
+
+  -- most recent revenue
+  LEFT JOIN (
+      SELECT
+        company_id,
+        MAX(billing_month) AS last_month_paid,
+        CASE WHEN MAX(billing_month) >= DATEADD(month, -1, DATE_TRUNC('month', CURRENT_DATE))
+             THEN 1
+             ELSE 0
+             END AS paid_prev_month
+      FROM
+        rollups.cw_monthly_revenue
+      GROUP BY
+        company_id
+  ) last
+  ON last.company_id = plan.company_id
+
+  --initial revenue
+  LEFT JOIN (
+      SELECT
+        rev.company_id,
+        billing_month AS first_month,
+        COALESCE(rev.employee_fee_count, 0) AS initial_ee_count,
+        COALESCE(rev.total_service_fee_amount / 100.00, 0) AS initial_mrr
+      FROM
+        rollups.cw_monthly_revenue rev
+      WHERE
+        rev.month_of_payment=1
+  ) init
+  ON plan.company_id = init.company_id
+
+  -- paid ee and last month of employee_fee payment for ee
+  LEFT OUTER JOIN (
+      SELECT member_id, MAX(invoice_month) as most_recent_month
+      FROM rollups.cw_monthly_ee_fees
+      GROUP BY member_id
+  ) ee_fees
+  ON ee_fees.member_id = members.member_id
+
+  -- manager flag
+  LEFT OUTER JOIN(
+    select  distinct manager_member_id 
+    from rollups.cw_active_member_ids) manager
+    ON manager_member_id=members.member_id
+
+--
+  LEFT OUTER JOIN
+    clockwork.companies c
+      ON c.id = members.company_id
+  LEFT OUTER JOIN
+    clockwork.offices o
+      ON o.id = members.office_id
+  LEFT OUTER JOIN
+    clockwork.addresses a1
+      ON o.physical_address_id = a1.id
+
+  LEFT OUTER JOIN
+    clockwork.addresses a2
+      ON members.home_address_id = a2.id
+
+  LEFT OUTER JOIN clockwork.addresses a3 ON c.primary_address_id = a3.id
+
+  -- number of permissions per member/member with most permissions
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        mem.member_id,
+        mem.num_perms,
+        mem.permission_names,
+        CASE  WHEN mem.num_perms = most_perm.most_permissions
+              THEN 1
+              ELSE 0
+              END AS is_member_with_most_permissions
+      FROM (
+          SELECT
+            perm.member_id,
+            perm.company_id,
+            COUNT(perm.permission_id) as num_perms,
+            listagg(perm.name, ', ')
+              WITHIN GROUP (ORDER BY perm.permission_id) AS permission_names
+          FROM (
+            SELECT mp.member_id, cm.company_id, cap.id as permission_id, cap.name, cap.description,
+              listagg(mp.permission_id, ', ') as parent_permission_id_list
+            FROM clockwork.member_permissions mp
+            JOIN
+              clockwork.members cm
+                ON cm.id = mp.member_id
+            -- inner join with (new) permissions table duplicates records when parent maps to sub permission
+            JOIN
+              clockwork.company_admin_permissions cap
+                ON CASE WHEN mp.permission_id = 3 THEN cap.id IN (3, 2, 9, 10, 13)
+                        WHEN mp.permission_id = 4 THEN cap.id IN (4, 6, 10)
+                        WHEN mp.permission_id = 6 THEN cap.id IN (6, 10)
+                        ELSE mp.permission_id = cap.id END
+            GROUP BY cm.company_id,
+              mp.member_id,
+              cap.id,
+              cap.name,
+              cap.description
+          ) perm
+          GROUP BY 
+            perm.member_id,
+            perm.company_id
+        ) mem
+      -- inner join with (new) permissions table to find max granted per company
+      JOIN (
+          SELECT
+            cperm.company_id,
+            MAX(cperm.n_permissions) AS most_permissions
+          FROM (
+                SELECT company_id, mp.member_id,
+                       count(distinct cap.id) as n_permissions -- parent can grant duplicate sub permissions
+                FROM clockwork.member_permissions mp
+                JOIN
+                  clockwork.members cm
+                    ON cm.id = mp.member_id
+                JOIN
+                  clockwork.company_admin_permissions cap
+                    ON CASE WHEN mp.permission_id = 3 THEN cap.id IN (3, 2, 9, 10, 13)
+                            WHEN mp.permission_id = 4 THEN cap.id IN (4, 6, 10)
+                            WHEN mp.permission_id = 6 THEN cap.id IN (6, 10)
+                            ELSE mp.permission_id = cap.id END
+                GROUP BY 
+                  company_id, 
+                  mp.member_id
+            ) cperm
+          GROUP BY
+            cperm.company_id
+        ) most_perm
+        ON most_perm.company_id = mem.company_id
+  ) perms
+  ON perms.member_id = members.member_id
+
+  -- preferred contacts
+  LEFT OUTER JOIN (
+      SELECT member_id,
+             listagg(contact_type, ', ') AS preferred_contact_types
+      FROM clockwork.preferred_contacts
+      GROUP BY member_id
+  ) contacts
+  ON contacts.member_id = members.member_id
+
+  LEFT OUTER JOIN static.member_type_booleans mtbool on mtbool.member_type = members.member_type
+
+  LEFT OUTER JOIN
+    clockwork.members active_member
+    ON active_member.id = members.member_id
+    AND plan.plan_type IN ('employee_basic','employee_premium','employee_premium_unbundled','premier2019','peo')
+    AND members.member_status != 'terminated'
+
+  -- insurance policies (lists only data for members with currently active policies)
+  LEFT OUTER JOIN (
+      SELECT member_id,
+      MAX(CASE WHEN policy_type = 'medical' THEN jw_policy_name END) as jw_medical_policy_name,
+      MAX(CASE WHEN policy_type = 'medical' THEN provider_name END) as medical_provider_name,
+      MAX(CASE WHEN policy_type = 'medical' THEN enrollment_type END) as medical_enrollment_type,
+      MAX(CASE WHEN policy_type = 'dental' THEN jw_policy_name END) as jw_dental_policy_name,
+      MAX(CASE WHEN policy_type = 'dental' THEN provider_name END) as dental_provider_name,
+      MAX(CASE WHEN policy_type = 'dental' THEN enrollment_type END) as dental_enrollment_type,
+      MAX(CASE WHEN policy_type = 'vision' THEN jw_policy_name END) as jw_vision_policy_name,
+      MAX(CASE WHEN policy_type = 'vision' THEN provider_name END) as vision_provider_name,
+      MAX(CASE WHEN policy_type = 'vision' THEN enrollment_type END) as vision_enrollment_type
+
+      FROM
+      (
+              SELECT mip3.member_id, mip.policy_type, mip3.name AS jw_policy_name, mip3.enrollment_type AS enrollment_type, p.name AS provider_name, mip.max_start_date, mip3.end_date
+              FROM
+              (
+              SELECT member_id, policy_type, MAX(mip.start_date) AS max_start_date
+              FROM (SELECT * FROM clockwork.member_insurance_policies WHERE start_date <= current_date
+                    AND (end_date >= start_date OR end_date is null)) mip
+                  LEFT JOIN clockwork.insurance_policies ip
+                  ON mip.insurance_policy_id = ip.id
+              GROUP BY 1,2
+              ) mip
+              LEFT JOIN
+              (SELECT DISTINCT member_id, mip2.start_date, mip2.end_date, mip2.enrollment_type, ip.policy_type , ip.name, ip.provider_id
+                  FROM clockwork.member_insurance_policies mip2
+                  LEFT JOIN clockwork.insurance_policies ip ON mip2.insurance_policy_id = ip.id
+                  WHERE (mip2.end_date >= mip2.start_date OR mip2.end_date is null)
+                  ) mip3
+              ON mip.member_id = mip3.member_id AND mip.max_start_date = mip3.start_date AND mip.policy_type = mip3.policy_type
+              LEFT JOIN clockwork.providers p
+              ON mip3.provider_id = p.id
+              WHERE (mip3.end_date >= current_date OR mip3.end_date IS NULL)
+              AND mip.max_start_date <= current_date
+      )
+      GROUP BY member_id
+  ) ins
+  ON ins.member_id = members.member_id
+
+  -- hsa
+  LEFT OUTER JOIN (
+    SELECT DISTINCT mplan.member_id, mplan.member_contribution_amount 
+    FROM (
+          -- member's most recent HSA entry, excluding future plans
+          SELECT mhi.*
+          FROM clockwork.member_hsa_items mhi
+          JOIN
+            ( SELECT member_id,
+                     start_date,
+                     max(updated_at) AS max_updated_at
+             FROM clockwork.member_hsa_items
+             WHERE start_date <= current_date
+             GROUP BY 1,
+                      2 ) max_up ON mhi.member_id = max_up.member_id
+          AND mhi.updated_at = max_up.max_updated_at
+          AND mhi.start_date = max_up.start_date
+          JOIN
+            ( SELECT member_id,
+                     max(start_date) AS max_start_date
+             FROM clockwork.member_hsa_items
+             WHERE start_date <= current_date
+             GROUP BY 1 ) max_start ON mhi.member_id = max_start.member_id
+          AND mhi.start_date = max_start.max_start_date ) mplan
+    JOIN clockwork.members m ON mplan.member_id = m.id
+    JOIN (
+          -- company's most recent HSA policy, excluding future plans
+          SELECT chp.*
+          FROM clockwork.company_hsa_policies chp
+          JOIN
+            ( SELECT company_id,
+                     start_date,
+                     max(updated_at) AS max_updated_at
+             FROM clockwork.company_hsa_policies
+             WHERE start_date <= current_date
+             GROUP BY 1,
+                      2 ) max_up ON chp.company_id = max_up.company_id
+          AND chp.updated_at = max_up.max_updated_at
+          AND chp.start_date = max_up.start_date
+          JOIN
+            ( SELECT company_id,
+                     max(start_date) AS max_start_date
+             FROM clockwork.company_hsa_policies
+             WHERE start_date <= current_date
+             GROUP BY 1 ) max_start ON chp.company_id = max_start.company_id
+          AND chp.start_date = max_start.max_start_date ) cplan ON m.company_id = cplan.company_id
+
+    WHERE (mplan.end_date IS NULL
+          OR mplan.end_date >= CURRENT_DATE)
+      AND (cplan.end_date IS NULL
+          OR cplan.end_date >= CURRENT_DATE)
+  ) hsa
+  ON members.member_id = hsa.member_id
+
+   -- member HSA & HDHP eligible
+  LEFT OUTER JOIN (
+      SELECT DISTINCT mhdhp.member_id, chsa.company_id
+      FROM clockwork.company_hsa_policies chsa
+      JOIN clockwork.company_insurance_policies chdhp ON chdhp.company_id = chsa.company_id
+      JOIN clockwork.members cm ON cm.company_id = chdhp.company_id
+      JOIN (select mhdhp.start_date, mhdhp.end_date, mhdhp.member_id, insurance_policy_id, ip.parent_policy_id from clockwork.member_insurance_policies mhdhp 
+LEFT JOIN clockwork.insurance_policies ip ON mhdhp.insurance_policy_id = ip.id) mhdhp ON 
+chdhp.insurance_policy_id in (mhdhp.insurance_policy_id, mhdhp.parent_policy_id) AND mhdhp.member_id = cm.id
+LEFT JOIN (select e.election_type, e.member_id, e.amount from 
+(select max(fsa_plan_year_id) as max_year from clockwork.fsa_elections) a
+LEFT JOIN clockwork.fsa_elections e ON e.fsa_plan_year_id=a.max_year) fsa ON fsa.member_id=mhdhp.member_id
+      JOIN clockwork.insurance_policies ip ON chdhp.insurance_policy_id = ip.id AND ip.hdhp = 1
+      WHERE chsa.start_date <= CURRENT_DATE AND (chsa.end_date >= CURRENT_DATE OR chsa.end_date IS NULL)
+        AND chdhp.start_date <= CURRENT_DATE AND (chdhp.end_date >= CURRENT_DATE OR chdhp.end_date IS NULL)
+        AND mhdhp.start_date <= CURRENT_DATE AND (mhdhp.end_date >= CURRENT_DATE OR mhdhp.end_date IS NULL)
+        AND (fsa.election_type !='H' OR fsa.election_type is null OR (fsa.election_type='H' AND fsa.amount=0) )
+  ) mhsa_eligible
+  on mhsa_eligible.member_id = members.member_id
+
+
+  -- fsa
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM (
+          SELECT
+            fsa.*
+          FROM
+            clockwork.fsa_elections fsa
+          JOIN (
+              SELECT
+                member_id,
+                election_type,
+                fsa_plan_year_id,
+                MAX(effective_date) AS max_effective_date
+              FROM
+                clockwork.fsa_elections
+              WHERE
+                effective_date <= current_date
+              GROUP BY
+                member_id,
+                election_type,
+                fsa_plan_year_id
+            ) max_eff
+            ON fsa.member_id = max_eff.member_id
+            AND fsa.election_type = max_eff.election_type
+            AND fsa.fsa_plan_year_id = max_eff.fsa_plan_year_id
+            AND fsa.effective_date = max_eff.max_effective_date
+          JOIN (
+              SELECT
+                member_id,
+                election_type,
+                fsa_plan_year_id,
+                effective_date,
+                MAX(updated_at) AS max_updated_date
+              FROM
+                clockwork.fsa_elections
+              WHERE
+                effective_date <= current_date
+              GROUP BY
+                member_id,
+                election_type,
+                fsa_plan_year_id,
+                effective_date
+            ) max_up
+            ON max_eff.member_id = max_up.member_id
+            AND max_eff.election_type = max_up.election_type
+            AND max_eff.fsa_plan_year_id = max_up.fsa_plan_year_id
+            AND max_eff.max_effective_date = max_up.effective_date
+            AND fsa.updated_at = max_up.max_updated_date
+          JOIN
+            clockwork.fsa_plan_years years
+              ON years.id = fsa.fsa_plan_year_id
+          WHERE
+            years.start_date <= current_date
+            AND current_date BETWEEN years.start_date AND years.end_date
+        )
+
+      WHERE
+        amount > 0
+  ) fsa
+  ON members.member_id = fsa.member_id
+
+  -- company fsa eligible
+  LEFT OUTER JOIN (
+      SELECT 
+        company_id, 
+        pte_eligible,
+        ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY cfsa.start_date DESC) rownumber
+      FROM 
+        clockwork.company_fsa_states cfsa 
+      WHERE 
+        cfsa.start_date <= CURRENT_DATE 
+        AND (cfsa.end_date >= CURRENT_DATE OR cfsa.end_date IS NULL)
+  ) cfsa_eligible
+  ON cfsa_eligible.company_id = members.company_id
+    AND cfsa_eligible.rownumber = 1
+
+  -- commuter
+  -- flag commuters based on max effective date in the member_commuter_orders table
+  LEFT OUTER JOIN (
+      SELECT mco.member_id,
+             mco.max_post_date,
+             CASE
+                 WHEN commuter_orders.co_max_post_month IS NOT NULL THEN 1
+                 ELSE 0
+             END AS commuter
+FROM
+        (SELECT member_id,
+                MAX(DATE_TRUNC('month', post_date)) AS max_post_date
+         FROM clockwork.member_commuter_orders
+         WHERE deleted = 0
+         GROUP BY 1) mco
+      LEFT JOIN
+        (SELECT MAX(DATE_TRUNC('month', post_date)) AS co_max_post_month
+         FROM clockwork.member_commuter_orders
+         WHERE deleted = 0
+         ) commuter_orders ON mco.max_post_date = commuter_orders.co_max_post_month
+  ) commuter
+  ON members.member_id = commuter.member_id
+
+  -- company restricts commuter pte
+  LEFT OUTER JOIN (
+      SELECT DISTINCT company_id
+      FROM clockwork.company_commuter_plans
+      WHERE pte_eligible = false AND deleted = 0
+        AND start_date <= CURRENT_DATE AND (end_date >= CURRENT_DATE OR end_date IS NULL)
+  ) ctransit_restrict_pte
+  on ctransit_restrict_pte.company_id = members.company_id
+
+  -- company restricts commuter interns
+  LEFT OUTER JOIN (
+      SELECT DISTINCT company_id
+      FROM clockwork.company_commuter_plans
+      WHERE interns_eligible = false AND deleted = 0
+        AND start_date <= CURRENT_DATE AND (end_date >= CURRENT_DATE OR end_date IS NULL)
+  ) ctransit_restrict_interns
+  on ctransit_restrict_interns.company_id = members.company_id
+
+  -- 401k - slavic
+  LEFT OUTER JOIN (
+    SELECT DISTINCT
+        sdo.member_id
+          FROM
+            clockwork.slavic_deferral_orders sdo
+          JOIN (
+                  SELECT
+                    member_id,
+                    effective_date,
+                    deferral_type,
+                    voucher_earnings_category,
+                    max(updated_at) as max_date
+                  FROM
+                    clockwork.slavic_deferral_orders
+                  WHERE
+                    deferral_type IN ('D', 'R')
+                  GROUP BY
+                    member_id,
+                    effective_date,
+                    deferral_type,
+                    voucher_earnings_category
+              ) max_up
+              ON max_up.member_id = sdo.member_id
+              AND max_up.effective_date = sdo.effective_date
+              AND max_up.max_date = sdo.updated_at
+              AND max_up.deferral_type = sdo.deferral_type
+              AND max_up.voucher_earnings_category = sdo.voucher_earnings_category
+          JOIN (
+                  SELECT
+                    member_id,
+                    deferral_type,
+                    voucher_earnings_category,
+                    MAX(effective_date) as max_date
+                  FROM
+                    clockwork.slavic_deferral_orders
+                  WHERE
+                    deferral_type IN ('D', 'R')
+                  GROUP BY
+                    member_id,
+                    deferral_type,
+                    voucher_earnings_category
+              ) max_eff
+              ON max_eff.member_id = sdo.member_id
+              AND max_eff.max_date = sdo.effective_date
+              AND max_eff.deferral_type = sdo.deferral_type
+              AND max_eff.voucher_earnings_category = sdo.voucher_earnings_category
+          JOIN clockwork.members m ON sdo.member_id = m.id
+          JOIN clockwork.company401k_plans cfp ON m.company_id = cfp.company_id
+          WHERE
+            sdo.deferral_type IN ('D', 'R')
+            AND sdo.effective_date <= current_date AND
+              (COALESCE(flat_amount, 0) > 0 OR COALESCE("percent", 0) > 0)
+            AND cfp.start_date <= CURRENT_DATE
+            AND (cfp.end_date >= CURRENT_DATE OR cfp.end_date IS NULL)
+  ) slavic
+  ON members.member_id = slavic.member_id
+
+  -- company 401k plan eligible
+  LEFT OUTER JOIN (
+      SELECT DISTINCT company_id, participation_age
+      FROM clockwork.company401k_plans cfp
+      WHERE cfp.start_date <= CURRENT_DATE AND (cfp.end_date >= CURRENT_DATE OR cfp.end_date IS NULL)
+  ) cfour01k_eligible
+  on cfour01k_eligible.company_id = members.company_id
+
+  -- nyhrc (gym)
+  LEFT OUTER JOIN (
+      SELECT
+        member_id,
+        MAX(gym) as gym
+      FROM (
+          SELECT
+            m_perks.member_id,
+            CASE WHEN j_perks.plan_type = 'gym' THEN 1 ELSE 0 END as gym
+            FROM (
+                SELECT
+                  member_id,
+                  company_perk_plan_id
+                  FROM
+                    clockwork.member_perk_plan_items
+                  WHERE
+                    (end_date >= current_date or end_date IS NULL)
+                    AND start_date <= current_date
+                ) m_perks
+                JOIN (
+                    SELECT
+                      id,
+                      justworks_perk_id
+                  FROM
+                    clockwork.company_perk_plans
+                  WHERE
+                    (end_date >= current_date or end_date IS NULL)
+                    AND start_date <= current_date
+                ) c_perks
+                    ON c_perks.id = m_perks.company_perk_plan_id
+                JOIN clockwork.justworks_perks j_perks
+                    ON c_perks.justworks_perk_id = j_perks.id
+        )
+      GROUP BY
+        member_id
+  ) perks_gym
+  ON members.member_id = perks_gym.member_id
+
+ -- classpass
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        mppi.member_id
+      FROM clockwork.member_perk_plan_items mppi
+      JOIN clockwork.company_perk_plans cpp ON cpp.id = mppi.company_perk_plan_id
+      JOIN clockwork.company_perk_allowances cpa ON cpa.company_id = cpp.company_id AND cpa.perk_category = 'fitness'
+      JOIN clockwork.justworks_perks jp on jp.id = cpp.justworks_perk_id
+      WHERE jp.plan_type = 'classpass'
+          AND cpa.amount >= 1500
+          AND cpa.start_date <= current_date AND (cpa.end_date IS NULL OR cpa.end_date >= current_date)
+          AND cpp.start_date <= current_date AND (cpp.end_date IS NULL OR cpp.end_date >= current_date)
+          AND mppi.start_date <= current_date AND (mppi.end_date IS NULL OR mppi.end_date >= current_date)
+  ) perks_classpass
+  ON members.member_id = perks_classpass.member_id
+
+  -- citibike
+  LEFT OUTER JOIN (
+      SELECT
+        member_id,
+        MAX(ny_citibike) as ny_citibike
+      FROM (
+          SELECT
+            m_perks.member_id,
+            CASE WHEN j_perks.plan_type = 'bike' THEN 1 ELSE 0 END as ny_citibike
+            FROM (
+                SELECT
+                  member_id,
+                  company_perk_plan_id
+                  FROM
+                    clockwork.member_perk_plan_items
+                  WHERE
+                    (end_date >= current_date or end_date IS NULL)
+                    AND start_date <= current_date
+                ) m_perks
+                JOIN (
+                    SELECT
+                      id,
+                      justworks_perk_id
+                  FROM
+                    clockwork.company_perk_plans
+                ) c_perks
+                    ON c_perks.id = m_perks.company_perk_plan_id
+                JOIN clockwork.justworks_perks j_perks
+                    ON c_perks.justworks_perk_id = j_perks.id
+        )
+      GROUP BY
+        member_id
+  ) perks_bike
+  ON members.member_id = perks_bike.member_id
+
+  -- company justworks_perks eligible
+  LEFT OUTER JOIN (
+      SELECT
+        cpp.company_id,
+        MAX(CASE WHEN jp.plan_type = 'gym' THEN 1 ELSE 0 END) AS gym,
+        MAX(CASE WHEN jp.plan_type = 'bike' THEN 1 ELSE 0 END) AS citi_bike,
+        MAX(CASE WHEN jp.plan_type = 'gym' THEN coalesce(cpp.pte_enabled, jp.pte_eligible) ELSE 0 END) AS gym_pte_enabled,
+        MAX(CASE WHEN jp.plan_type = 'bike' THEN coalesce(cpp.pte_enabled, jp.pte_eligible) ELSE 0 END) AS citi_bike_pte_enabled
+      FROM clockwork.company_perk_plans cpp
+      JOIN clockwork.justworks_perks jp ON cpp.justworks_perk_id = jp.id
+      WHERE cpp.start_date <= CURRENT_DATE AND (cpp.end_date >= CURRENT_DATE OR cpp.end_date IS NULL)
+      GROUP BY
+        cpp.company_id
+    ) cperks_eligible
+      ON cperks_eligible.company_id = members.company_id
+
+  -- company justworks_perks_classpass eligible
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        cpp.company_id, coalesce(cpp.pte_enabled, jp.pte_eligible) as pte_enabled
+      FROM clockwork.company_perk_plans cpp
+      JOIN clockwork.company_perk_allowances cpa ON cpa.company_id = cpp.company_id AND cpa.perk_category = 'fitness'
+      JOIN clockwork.justworks_perks jp on jp.id = cpp.justworks_perk_id
+      WHERE jp.plan_type = 'classpass'
+          AND cpa.amount >= 1500
+          AND cpa.start_date <= current_date AND (cpa.end_date IS NULL OR cpa.end_date >= current_date)
+          AND cpp.start_date <= current_date AND (cpp.end_date IS NULL OR cpp.end_date >= current_date)
+    ) cperks_classpass_eligible
+      ON cperks_classpass_eligible.company_id = members.company_id
+
+  -- life add
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM
+        clockwork.life_add_member_ancillary_benefit_plans
+      WHERE
+        start_date <= current_date
+        AND (end_date >= current_date OR end_date IS NULL)
+  ) life_add
+  ON life_add.member_id = members.member_id
+
+  -- ltd add
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM
+        clockwork.ltd_member_ancillary_benefit_plans
+      WHERE
+        start_date <= current_date
+        AND (end_date >= current_date OR end_date IS NULL)
+  ) ltd
+  ON ltd.member_id = members.member_id
+
+  -- std add
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM
+        clockwork.std_member_ancillary_benefit_plans
+      WHERE
+        start_date <= current_date
+        AND (end_date >= current_date OR end_date IS NULL)
+  ) std
+  ON std.member_id = members.member_id
+
+  -- EE paid STD
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM
+        clockwork.voluntary_std_member_ancillary_benefit_plans
+      WHERE
+        start_date <= current_date
+        AND (end_date >= current_date OR end_date IS NULL)
+  ) ee_std
+  ON ee_std.member_id = members.member_id
+
+  -- EE paid LTD
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM
+        clockwork.voluntary_ltd_member_ancillary_benefit_plans
+      WHERE
+        start_date <= current_date
+        AND (end_date >= current_date OR end_date IS NULL)
+  ) ee_ltd
+  ON ee_ltd.member_id = members.member_id
+
+  -- EE paid Supplemental Life Insurance
+  LEFT OUTER JOIN (
+      SELECT DISTINCT
+        member_id
+      FROM
+        clockwork.supp_life_member_ancillary_benefit_plans
+      WHERE
+        start_date <= current_date
+        AND (end_date >= current_date OR end_date IS NULL)
+  ) ee_supp
+  ON ee_supp.member_id = members.member_id
+
+  -- MSA
+  LEFT JOIN
+    static.dol_zip_to_msa msa1
+      ON msa1.zip_code = LEFT(a1.postal_code, 5)
+
+  LEFT JOIN
+    static.dol_zip_to_msa msa2
+      ON msa2.zip_code = LEFT(a2.postal_code, 5)
+
+  LEFT JOIN
+    static.dol_zip_to_msa msa3
+      ON msa3.zip_code = LEFT(a3.postal_code, 5)
+
+]
+
+JWRollup.do_rollup('cw_member_info', select_query)
